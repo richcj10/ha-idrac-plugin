@@ -159,13 +159,20 @@ def extract_useful_sensors(sdr_text: str) -> Dict[str, Any]:
 
         numeric = parse_numeric_reading(reading)
 
-        if name == "Ambient Temp" and numeric and "degree" in numeric["units"].lower():
-            result["ambient_temp_c"] = numeric["value"]
+        # Temperature: any sensor containing "temp" with a degrees reading
+        if re.search(r"\btemp\b", name, re.IGNORECASE) and numeric and "degree" in numeric["units"].lower():
+            if re.search(r"ambient|inlet", name, re.IGNORECASE):
+                key = "ambient_temp_c"
+            else:
+                parts = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_").split("_")
+                key = "_".join(p for p in parts) + "_c"
+            result.setdefault(key, numeric["value"])
             continue
 
-        if re.fullmatch(r"FAN\s+\d+\s+RPM", name) and numeric and numeric["units"].lower() == "rpm":
-            fan_num = re.findall(r"\d+", name)[0]
-            result[f"fan_{fan_num}_rpm"] = numeric["value"]
+        # Fans: "FAN N" or "FAN N RPM" — name just needs to start with FAN + number
+        fan_match = re.match(r"fan\s*(\d+)", name, re.IGNORECASE)
+        if fan_match and numeric and numeric["units"].lower() == "rpm":
+            result[f"fan_{fan_match.group(1)}_rpm"] = numeric["value"]
             continue
 
         if name == "System Level" and numeric and "watt" in numeric["units"].lower():
@@ -228,77 +235,6 @@ def publish_discovery(client: mqtt.Client, prefix: str, server: dict) -> None:
             "name": "Overall Health",
             "state_topic": f"{prefix}/overall_health",
             "icon": "mdi:shield-alert-outline",
-        },
-        "ambient_temp_c": {
-            "component": "sensor",
-            "name": "Ambient Temp",
-            "state_topic": f"{prefix}/ambient_temp_c",
-            "device_class": "temperature",
-            "state_class": "measurement",
-            "unit_of_measurement": "°C",
-        },
-        "fan_1_rpm": {
-            "component": "sensor",
-            "name": "Fan 1 RPM",
-            "state_topic": f"{prefix}/fan_1_rpm",
-            "state_class": "measurement",
-            "unit_of_measurement": "RPM",
-        },
-        "fan_2_rpm": {
-            "component": "sensor",
-            "name": "Fan 2 RPM",
-            "state_topic": f"{prefix}/fan_2_rpm",
-            "state_class": "measurement",
-            "unit_of_measurement": "RPM",
-        },
-        "fan_3_rpm": {
-            "component": "sensor",
-            "name": "Fan 3 RPM",
-            "state_topic": f"{prefix}/fan_3_rpm",
-            "state_class": "measurement",
-            "unit_of_measurement": "RPM",
-        },
-        "fan_4_rpm": {
-            "component": "sensor",
-            "name": "Fan 4 RPM",
-            "state_topic": f"{prefix}/fan_4_rpm",
-            "state_class": "measurement",
-            "unit_of_measurement": "RPM",
-        },
-        "fan_5_rpm": {
-            "component": "sensor",
-            "name": "Fan 5 RPM",
-            "state_topic": f"{prefix}/fan_5_rpm",
-            "state_class": "measurement",
-            "unit_of_measurement": "RPM",
-        },
-        "system_power_w": {
-            "component": "sensor",
-            "name": "System Power",
-            "state_topic": f"{prefix}/system_power_w",
-            "device_class": "power",
-            "state_class": "measurement",
-            "unit_of_measurement": "W",
-        },
-        "psu_input_voltage_v": {
-            "component": "sensor",
-            "name": "PSU Input Voltage",
-            "state_topic": f"{prefix}/psu_input_voltage_v",
-            "state_class": "measurement",
-            "unit_of_measurement": "V",
-        },
-        "psu_input_current_a": {
-            "component": "sensor",
-            "name": "PSU Input Current",
-            "state_topic": f"{prefix}/psu_input_current_a",
-            "state_class": "measurement",
-            "unit_of_measurement": "A",
-        },
-        "fan_redundancy": {
-            "component": "sensor",
-            "name": "Fan Redundancy",
-            "state_topic": f"{prefix}/fan_redundancy",
-            "icon": "mdi:fan-alert",
         },
         "last_error": {
             "component": "sensor",
@@ -366,6 +302,47 @@ def publish_discovery(client: mqtt.Client, prefix: str, server: dict) -> None:
         "device_class": "connectivity",
     }
     publish(client, availability_topic, availability_payload, retain=True)
+
+
+def _sensor_meta(key: str) -> Dict[str, Any]:
+    fan_m = re.fullmatch(r"fan_(\d+)_rpm", key)
+    if fan_m:
+        return {"name": f"Fan {fan_m.group(1)} RPM", "state_class": "measurement", "unit_of_measurement": "RPM"}
+    if key == "system_power_w":
+        return {"name": "System Power", "device_class": "power", "state_class": "measurement", "unit_of_measurement": "W"}
+    if key == "psu_input_voltage_v":
+        return {"name": "PSU Input Voltage", "device_class": "voltage", "state_class": "measurement", "unit_of_measurement": "V"}
+    if key == "psu_input_current_a":
+        return {"name": "PSU Input Current", "device_class": "current", "state_class": "measurement", "unit_of_measurement": "A"}
+    if key == "fan_redundancy":
+        return {"name": "Fan Redundancy", "icon": "mdi:fan-alert"}
+    if key.endswith("_c"):
+        parts = re.sub(r"_c$", "", key).split("_")
+        name = " ".join(p.upper() if re.match(r"cpu\d*$", p) else p.capitalize() for p in parts)
+        return {"name": name, "device_class": "temperature", "state_class": "measurement", "unit_of_measurement": "°C"}
+    return {"name": key.replace("_", " ").title()}
+
+
+def publish_sensor_discovery(client: mqtt.Client, prefix: str, server: dict, sensor_keys) -> None:
+    server_name = server["name"]
+    server_id = re.sub(r"[^a-z0-9_]", "_", server_name.lower())
+    device = {
+        "identifiers": [f"idrac_{server_id}"],
+        "name": f"iDRAC {server_name}",
+        "manufacturer": "Dell",
+        "model": "iDRAC",
+    }
+    for key in sensor_keys:
+        meta = _sensor_meta(key)
+        payload = {
+            "unique_id": f"idrac_{server_id}_{key}",
+            "device": device,
+            "state_topic": f"{prefix}/{key}",
+        }
+        payload.update(meta)
+        topic = f"homeassistant/sensor/{prefix.replace('/', '_')}/{key}/config"
+        publish(client, topic, payload, retain=True)
+        log.debug("Published sensor discovery: %s", topic)
 
 
 def handle_sel_command(server: dict, payload: str, timeout: int = 20) -> str:
@@ -507,6 +484,8 @@ def main() -> None:
         log.info("Subscribing to command topic: %s", command_topic)
         client.subscribe(command_topic)
 
+    discovered_sensors: Dict[str, set] = {s["name"]: set() for s in servers}
+
     while True:
         for server, prefix in server_entries:
             log.debug("Polling %s (host=%s)", server.get("name"), server.get("idrac_host"))
@@ -514,6 +493,11 @@ def main() -> None:
                 results = poll_server(server, command_timeout)
                 log.debug("Poll ok for %s: power=%s health=%s",
                           server["name"], results["power_state"], results["overall_health"])
+                new_keys = set(results["sensors"].keys()) - discovered_sensors[server["name"]]
+                if new_keys:
+                    log.info("New sensors found for %s: %s", server["name"], sorted(new_keys))
+                    discovered_sensors[server["name"]].update(new_keys)
+                    publish_sensor_discovery(client, prefix, server, new_keys)
                 publish_poll_results(client, prefix, results)
                 publish(client, f"{prefix}/last_error", "")
             except Exception as e:
