@@ -1,0 +1,47 @@
+name: "iDRAC MQTT Poller"
+version: "0.6.0"
+slug: "idrac_mqtt"
+description: "Poll iDRAC servers via ipmitool and publish stats to MQTT"
+startup: services
+boot: auto
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+host_network: true
+
+options:
+  servers:
+    - name: "server1"
+      idrac_host: "192.168.1.100"
+      idrac_user: "root"
+      idrac_password: "changeme"
+      os_host: ""
+  mqtt_host: "127.0.0.1"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+  mqtt_topic_prefix: "idrac"
+  poll_interval: 30
+  command_timeout: 20
+  log_level: "INFO"
+
+schema:
+  servers:
+    - name: str
+      idrac_host: str
+      idrac_user: str
+      idrac_password: password
+      os_host: str?
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_user: str?
+  mqtt_password: password?
+  mqtt_topic_prefix: str
+  poll_interval: int(5,)
+  command_timeout: int(3,)
+  log_level: list(DEBUG|INFO|WARNING|ERROR)?
