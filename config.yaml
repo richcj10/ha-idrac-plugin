@@ -1,5 +1,5 @@
 name: "iDRAC MQTT Poller"
-version: "0.6.0"
+version: "0.6.1"
 slug: "idrac_mqtt"
 description: "Poll iDRAC servers via ipmitool and publish stats to MQTT"
 startup: services
